@@ -5,7 +5,9 @@
 //#include <ESP8266WebServer.h>
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+#include <PubSubClient.h>
 
+#define PROTOCOL_NAMEv31      /* MQTT version 3.1 compatible with Mosquitto v0.15 */
 #define STR_SIZE 32
 
 //define your default values here, if there are different values in config.json, they are overwritten.
@@ -16,6 +18,10 @@ char blynk_token[STR_SIZE] = "YOUR_BLYNK_TOKEN";
 WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, STR_SIZE);
 WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, STR_SIZE);
 WiFiManagerParameter custom_blynk_token("blynk", "blynk token", blynk_token, STR_SIZE);
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+void mqtt_callback(char* topic, byte* payload, unsigned int length);
 
 //callback notifying us of the need to save config
 void ssaveConfigCallback () {
@@ -120,8 +126,69 @@ void setup() {
   Serial.println("local ip");
   Serial.println(WiFi.localIP());
 
+  //Setup MQTT
+  pinMode(BUILTIN_LED, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
+  client.setServer(custom_mqtt_server.getValue(), atoi(custom_mqtt_port.getValue()));
+  client.setCallback(mqtt_callback);
 }
 
+void mqtt_callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  // Switch on the LED if an 1 was received as first character
+  if ((char)payload[0] == '1') {
+    digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
+    // but actually the LED is on; this is because
+    // it is acive low on the ESP-01)
+  } else {
+    digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
+  }
+}
+
+void mqtt_reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("ESP8266Client")) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      client.publish("outTopic", "hello world");
+      // ... and resubscribe
+      client.subscribe("inTopic");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+char msg[50];
+int value = 0;
+long lastMsg = 0;
+
 void loop() {
-  // put your main code here, to run repeatedly:
+  if (!client.connected()) {
+    mqtt_reconnect();
+  }
+  client.loop();
+
+  long now = millis();
+  if (now - lastMsg > 2000) {
+    lastMsg = now;
+    ++value;
+    snprintf (msg, 75, "hello world #%ld", value);
+    Serial.print("Publish message: ");
+    Serial.println(msg);
+    client.publish("outTopic", msg);
+  }
 }
